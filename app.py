@@ -1,13 +1,9 @@
 """
-Robot Mini — permainan coding sederhana untuk anak (Streamlit)
+Robot Mini — Permainan Coding Sederhana untuk Anak (Streamlit)
+Dengan Visual 3D Isometrik Bergerak & Efek Suara (SFX).
 
 Cara menjalankan:
-    pip install streamlit
     streamlit run app.py
-
-Anak menekan tombol panah untuk menyusun "program", lalu menekan JALAN.
-Robot bergerak sesuai urutan kartu. Kalau meleset, perbaiki kartunya (debugging).
-Dilengkapi efek suara (SFX) ceria untuk anak.
 """
 
 import math
@@ -26,7 +22,7 @@ def buat_wav(nada_list, sample_rate=22050):
         total_samples = int(sample_rate * durasi)
         for i in range(total_samples):
             t = i / sample_rate
-            fade = 1.0 - (i / total_samples)  # Redam di akhir agar tidak 'klik'
+            fade = 1.0 - (i / total_samples)
             if bentuk == "sine":
                 val = math.sin(2 * math.pi * freq * t)
             elif bentuk == "square":
@@ -48,8 +44,8 @@ def buat_wav(nada_list, sample_rate=22050):
     wav.extend(struct.pack("<I", 36 + data_size))
     wav.extend(b"WAVEfmt ")
     wav.extend(struct.pack("<I", 16))
-    wav.extend(struct.pack("<H", 1))  # PCM
-    wav.extend(struct.pack("<H", 1))  # Mono
+    wav.extend(struct.pack("<H", 1))
+    wav.extend(struct.pack("<H", 1))
     wav.extend(struct.pack("<I", sample_rate))
     wav.extend(struct.pack("<I", sample_rate * 2))
     wav.extend(struct.pack("<H", 2))
@@ -60,34 +56,25 @@ def buat_wav(nada_list, sample_rate=22050):
     return bytes(wav)
 
 
-# Koleksi efek suara sintetis
 DAFTAR_SUARA = {
-    # Langkah robot ceria (nada ganda naik)
     "maju": buat_wav([(480, 0.05, "triangle", 0.45), (720, 0.08, "triangle", 0.45)]),
-    # Belok kiri
     "kiri": buat_wav([(380, 0.05, "sine", 0.4), (540, 0.08, "sine", 0.4)]),
-    # Belok kanan
     "kanan": buat_wav([(540, 0.05, "sine", 0.4), (380, 0.08, "sine", 0.4)]),
-    # Tabrak batu atau pinggir papan (DDUK!)
     "tabrak": buat_wav([(160, 0.09, "square", 0.5), (75, 0.18, "square", 0.6)]),
-    # Hore sampai target! (Fanfare C5-E5-G5-C6)
     "menang": buat_wav([
         (523, 0.09, "sine", 0.45),
         (659, 0.09, "sine", 0.45),
         (784, 0.11, "sine", 0.45),
         (1046, 0.32, "triangle", 0.55),
     ]),
-    # Klik kartu
     "klik": buat_wav([(650, 0.04, "sine", 0.3)]),
-    # Hapus kartu
     "hapus": buat_wav([(450, 0.04, "sine", 0.35), (280, 0.06, "sine", 0.35)]),
-    # Reset
     "ulang": buat_wav([(520, 0.05, "triangle", 0.3), (320, 0.08, "triangle", 0.3)]),
 }
 
 
 # ---------------------------------------------------------------------------
-# Data level
+# Data Level
 # arah: 0 = atas, 1 = kanan, 2 = bawah, 3 = kiri
 # ---------------------------------------------------------------------------
 LEVELS = [
@@ -140,6 +127,7 @@ LEVELS = [
 
 GERAK = {0: (-1, 0), 1: (0, 1), 2: (1, 0), 3: (0, -1)}
 PANAH_ARAH = {0: "⬆️", 1: "➡️", 2: "⬇️", 3: "⬅️"}
+DERAJAT_ARAH = {0: 0, 1: 90, 2: 180, 3: 270}
 KARTU = {
     "maju": ("⬆️", "MAJU", "#2e9e5b"),
     "kiri": ("↩️", "KIRI", "#2f6fd6"),
@@ -155,6 +143,7 @@ def reset_robot():
     st.session_state.pos = lv["start"]
     st.session_state.arah = lv["arah"]
     st.session_state.pesan = ("info", lv["petunjuk"])
+    st.session_state.status_animasi = "diam"
 
 
 def init_state():
@@ -164,6 +153,8 @@ def init_state():
         st.session_state.bintang = 0
         st.session_state.berhasil = [False] * len(LEVELS)
         st.session_state.suara = None
+        st.session_state.status_animasi = "diam"
+        st.session_state.tampilan_3d = "🌟 3D Isometrik"
         reset_robot()
 
 
@@ -184,42 +175,244 @@ def langkah(pos, arah, perintah, lv):
 
 
 # ---------------------------------------------------------------------------
-# Tampilan papan
+# Tampilan Papan 3D Bergerak
 # ---------------------------------------------------------------------------
-def gambar_papan(pos, arah, lv, sorot=None):
+def gambar_papan_3d(pos, arah, lv, status_animasi="diam", mode_tampilan="🌟 3D Isometrik"):
     n = lv["ukuran"]
-    sel = 92 if n == 4 else 76
-    baris_html = []
+    tile = 80 if n == 4 else 66
+    gap = 8 if n == 4 else 6
+    pad = 14
+    board_size = pad * 2 + n * tile + (n - 1) * gap
+
+    # Sudut pandang kamera 3D
+    if mode_tampilan == "🌟 3D Isometrik":
+        transform_board = "rotateX(48deg) rotateZ(-22deg)"
+        box_shadow_depth = "-12px 18px 0px #1e293b, -18px 26px 36px rgba(0,0,0,0.35)"
+    elif mode_tampilan == "📐 3D Miring Ringan":
+        transform_board = "rotateX(28deg) rotateZ(-10deg)"
+        box_shadow_depth = "-8px 12px 0px #1e293b, -12px 18px 24px rgba(0,0,0,0.25)"
+    else:  # 2D Datar
+        transform_board = "none"
+        box_shadow_depth = "0 8px 24px rgba(0,0,0,0.12)"
+
+    # Kelas animasi robot
+    anim_robot_class = "robot-idle-bob"
+    if status_animasi == "tabrak":
+        anim_robot_class = "robot-tabrak-shake"
+    elif status_animasi == "menang":
+        anim_robot_class = "robot-menang-spin"
+
+    tiles_html = []
+    entities_html = []
+
     for r in range(n):
-        kolom = []
         for c in range(n):
-            isi = ""
-            latar = "#f4efe3" if (r + c) % 2 == 0 else "#ebe4d3"
-            if (r, c) in lv["rintangan"]:
-                isi = "🪨"
-            if (r, c) == lv["target"]:
-                isi = "⚽" if LEVELS.index(lv) < 4 else "🥅"
-                latar = "#fff3b0"
-            if (r, c) == pos:
-                isi = (
-                    f"<div style='line-height:1'>🤖</div>"
-                    f"<div style='font-size:0.45em;line-height:1.2'>{PANAH_ARAH[arah]}</div>"
-                )
-                latar = "#cfe8ff"
-            if (r, c) == pos and pos == lv["target"]:
-                isi = "<div style='line-height:1'>🤖⚽</div><div style='font-size:0.45em'>🎉</div>"
-                latar = "#c9f2c7"
-            kolom.append(
-                f"<td style='width:{sel}px;height:{sel}px;background:{latar};"
-                f"text-align:center;vertical-align:middle;font-size:{int(sel * 0.48)}px;"
-                f"border:3px solid #fff;border-radius:14px'>{isi}</td>"
+            top = pad + r * (tile + gap)
+            left = pad + c * (tile + gap)
+            is_target = (r, c) == lv["target"]
+            is_rock = (r, c) in lv["rintangan"]
+
+            # Latar ubin 3D kotak-kotak lembut
+            bg_color = "#f8fafc" if (r + c) % 2 == 0 else "#e2e8f0"
+            tile_shadow = "inset 0 2px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.08)"
+            extra_style = ""
+
+            if is_target:
+                bg_color = "linear-gradient(135deg, #fef08a, #facc15)"
+                extra_style = "box-shadow: 0 0 16px rgba(250, 204, 21, 0.7), inset 0 2px 4px #fff; border: 2px dashed #ca8a04;"
+
+            tiles_html.append(
+                f"<div style='position:absolute;top:{top}px;left:{left}px;width:{tile}px;height:{tile}px;"
+                f"background:{bg_color};border-radius:14px;box-shadow:{tile_shadow};{extra_style}'></div>"
             )
-        baris_html.append("<tr>" + "".join(kolom) + "</tr>")
-    return (
-        "<table style='border-collapse:separate;border-spacing:4px;margin:auto'>"
-        + "".join(baris_html)
-        + "</table>"
+
+            # Rintangan batu 3D
+            if is_rock:
+                entities_html.append(
+                    f"<div class='rock-3d-entity' style='position:absolute;top:{top}px;left:{left}px;"
+                    f"width:{tile}px;height:{tile}px;display:flex;align-items:center;justify-content:center;'>"
+                    f"<div class='rock-shadow'></div>"
+                    f"<div class='rock-body' style='font-size:{int(tile * 0.58)}px'>🪨</div>"
+                    f"</div>"
+                )
+
+            # Target 3D (Bola atau Gawang) dengan animasi melayang membal
+            if is_target:
+                ikon_target = "⚽" if LEVELS.index(lv) < 4 else "🥅"
+                entities_html.append(
+                    f"<div class='target-3d-entity' style='position:absolute;top:{top}px;left:{left}px;"
+                    f"width:{tile}px;height:{tile}px;display:flex;align-items:center;justify-content:center;'>"
+                    f"<div class='target-shadow'></div>"
+                    f"<div class='target-bounce' style='font-size:{int(tile * 0.55)}px'>{ikon_target}</div>"
+                    f"</div>"
+                )
+
+    # Posisi koordinat robot saat ini
+    r_rob, c_rob = pos
+    r_top = pad + r_rob * (tile + gap)
+    r_left = pad + c_rob * (tile + gap)
+    rot_deg = DERAJAT_ARAH.get(arah, 0)
+
+    # Robot 3D dengan transform translate3d mulus & bayangan dinamis
+    entities_html.append(
+        f"<div class='robot-3d-container' style='top:{r_top}px;left:{r_left}px;width:{tile}px;height:{tile}px;'>"
+        f"  <div class='robot-ground-shadow'></div>"
+        f"  <div class='robot-turner' style='transform:rotate({rot_deg}deg);'>"
+        f"    <div class='{anim_robot_class} robot-avatar' style='font-size:{int(tile * 0.56)}px;'>"
+        f"      🤖"
+        f"      <div class='robot-laser-arrow'>{PANAH_ARAH[arah]}</div>"
+        f"    </div>"
+        f"  </div>"
+        f"</div>"
     )
+
+    return f"""
+    <style>
+    /* Stage 3D Perspective */
+    .stage-3d-wrapper {{
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        perspective: 900px;
+        padding: 24px 0 36px 0;
+        overflow: visible;
+    }}
+    .board-3d {{
+        position: relative;
+        width: {board_size}px;
+        height: {board_size}px;
+        transform-style: preserve-3d;
+        transform: {transform_board};
+        border-radius: 22px;
+        background: linear-gradient(145deg, #334155, #1e293b);
+        box-shadow: {box_shadow_depth};
+        transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+        border: 4px solid #475569;
+    }}
+
+    /* Target Animasi 3D Bouncing */
+    .target-3d-entity {{
+        pointer-events: none;
+    }}
+    .target-bounce {{
+        animation: targetFloat 1.2s ease-in-out infinite alternate;
+        filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));
+    }}
+    .target-shadow {{
+        position: absolute;
+        width: 60%;
+        height: 25%;
+        bottom: 8%;
+        background: radial-gradient(ellipse at center, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0) 70%);
+        animation: shadowPulse 1.2s ease-in-out infinite alternate;
+        border-radius: 50%;
+    }}
+
+    /* Rintangan Batu 3D */
+    .rock-3d-entity {{
+        pointer-events: none;
+    }}
+    .rock-body {{
+        transform: translateY(-4px);
+        filter: drop-shadow(-4px 8px 6px rgba(0,0,0,0.35));
+    }}
+    .rock-shadow {{
+        position: absolute;
+        width: 70%;
+        height: 28%;
+        bottom: 6%;
+        background: radial-gradient(ellipse at center, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0) 70%);
+        border-radius: 50%;
+    }}
+
+    /* Robot 3D Entities & Transitions */
+    .robot-3d-container {{
+        position: absolute;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: top 0.45s cubic-bezier(0.34, 1.45, 0.64, 1), 
+                    left 0.45s cubic-bezier(0.34, 1.45, 0.64, 1);
+        z-index: 20;
+        pointer-events: none;
+    }}
+    .robot-turner {{
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.4s cubic-bezier(0.34, 1.4, 0.64, 1);
+    }}
+    .robot-ground-shadow {{
+        position: absolute;
+        width: 68%;
+        height: 26%;
+        bottom: 6%;
+        background: radial-gradient(ellipse at center, rgba(15, 23, 42, 0.6) 0%, rgba(0,0,0,0) 70%);
+        border-radius: 50%;
+        animation: shadowPulse 0.9s ease-in-out infinite alternate;
+    }}
+    .robot-avatar {{
+        position: relative;
+        filter: drop-shadow(0 8px 12px rgba(0,0,0,0.35));
+        line-height: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }}
+    .robot-laser-arrow {{
+        position: absolute;
+        top: -10px;
+        font-size: 16px;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+    }}
+
+    /* Keyframe Animations */
+    @keyframes targetFloat {{
+        0% {{ transform: translateY(0px) scale(1); }}
+        100% {{ transform: translateY(-12px) scale(1.08); }}
+    }}
+    @keyframes shadowPulse {{
+        0% {{ transform: scale(1); opacity: 0.6; }}
+        100% {{ transform: scale(0.7); opacity: 0.25; }}
+    }}
+    @keyframes robotBob {{
+        0% {{ transform: translateY(0px) scale(1); }}
+        100% {{ transform: translateY(-8px) scale(1.05); }}
+    }}
+    @keyframes bumpWobble {{
+        0%, 100% {{ transform: translateX(0) scale(1); }}
+        20% {{ transform: translateX(-9px) rotate(-8deg) scale(0.95); }}
+        40% {{ transform: translateX(9px) rotate(8deg) scale(1.1); }}
+        60% {{ transform: translateX(-6px) rotate(-4deg); }}
+        80% {{ transform: translateX(4px) rotate(2deg); }}
+    }}
+    @keyframes victorySpin3D {{
+        0% {{ transform: translateY(0) rotate(0deg) scale(1); }}
+        40% {{ transform: translateY(-26px) rotate(180deg) scale(1.3); }}
+        80% {{ transform: translateY(-10px) rotate(360deg) scale(1.15); }}
+        100% {{ transform: translateY(0) rotate(360deg) scale(1); }}
+    }}
+
+    .robot-idle-bob {{
+        animation: robotBob 0.9s ease-in-out infinite alternate;
+    }}
+    .robot-tabrak-shake {{
+        animation: bumpWobble 0.5s ease-in-out;
+    }}
+    .robot-menang-spin {{
+        animation: victorySpin3D 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }}
+    </style>
+
+    <div class='stage-3d-wrapper'>
+      <div class='board-3d'>
+        {''.join(tiles_html)}
+        {''.join(entities_html)}
+      </div>
+    </div>
+    """
 
 
 def gambar_program(program, aktif=None):
@@ -234,7 +427,8 @@ def gambar_program(program, aktif=None):
         tebal = "6px solid #ffd400" if i == aktif else "3px solid transparent"
         kartu.append(
             f"<div style='display:inline-block;margin:4px;padding:6px 10px;border-radius:14px;"
-            f"background:{warna};color:#fff;text-align:center;border:{tebal};min-width:64px'>"
+            f"background:{warna};color:#fff;text-align:center;border:{tebal};min-width:64px;"
+            f"box-shadow:0 4px 10px rgba(0,0,0,0.15)'>"
             f"<div style='font-size:34px'>{ikon}</div>"
             f"<div style='font-size:13px;font-weight:700'>{i + 1}. {nama}</div></div>"
         )
@@ -242,22 +436,23 @@ def gambar_program(program, aktif=None):
 
 
 # ---------------------------------------------------------------------------
-# Aksi tombol
+# Aksi Tombol
 # ---------------------------------------------------------------------------
 def tambah(perintah):
     if st.session_state.langsung:
-        # Mode langsung (anak 3 tahun): tiap tombol langsung menggerakkan robot
         lv = LEVELS[st.session_state.level]
         pos, arah, err = langkah(st.session_state.pos, st.session_state.arah, perintah, lv)
         st.session_state.pos, st.session_state.arah = pos, arah
         if err:
             st.session_state.pesan = ("warning", err + " Coba arah lain ya!")
             st.session_state.suara = "tabrak"
+            st.session_state.status_animasi = "tabrak"
         elif pos == lv["target"]:
             selesai_level()
         else:
             st.session_state.pesan = ("info", "Bagus! Terus...")
             st.session_state.suara = perintah
+            st.session_state.status_animasi = "diam"
     else:
         if len(st.session_state.program) < 12:
             st.session_state.program.append(perintah)
@@ -284,6 +479,7 @@ def selesai_level():
     st.session_state.pesan = ("success", "HORE! Robot sampai! ⭐ Kamu hebat!")
     st.session_state.rayakan = True
     st.session_state.suara = "menang"
+    st.session_state.status_animasi = "menang"
 
 
 def ganti_level(i):
@@ -294,9 +490,9 @@ def ganti_level(i):
 
 
 # ---------------------------------------------------------------------------
-# Halaman
+# Halaman Utama
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="Robot Mini", page_icon="🤖", layout="centered")
+st.set_page_config(page_title="Robot Mini 3D", page_icon="🤖", layout="centered")
 init_state()
 
 st.markdown(
@@ -304,23 +500,39 @@ st.markdown(
     <style>
     div.stButton > button {
         height: 86px; border-radius: 20px;
+        box-shadow: 0 6px 14px rgba(0,0,0,0.12);
+        transition: all 0.2s ease;
+    }
+    div.stButton > button:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 20px rgba(0,0,0,0.18);
     }
     div.stButton > button p, div.stButton > button div {
         font-size: 30px !important; font-weight: 700 !important;
     }
     .block-container { padding-top: 1.2rem; }
-    /* Sembunyikan kontrol audio bawaan agar tampilan tetap rapi */
     div[data-testid="stAudio"] { display: none !important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Wadah efek suara
 wadah_suara = st.empty()
 
 with st.sidebar:
     st.header("👨👩👧 Untuk Orang Tua")
+
+    tampilan = st.radio(
+        "Kamera & Tampilan Papan",
+        ["🌟 3D Isometrik", "📐 3D Miring Ringan", "📋 2D Datar"],
+        index=["🌟 3D Isometrik", "📐 3D Miring Ringan", "📋 2D Datar"].index(st.session_state.tampilan_3d),
+        help="Pilih perspektif visual 3D yang paling disukai anak.",
+    )
+    if tampilan != st.session_state.tampilan_3d:
+        st.session_state.tampilan_3d = tampilan
+        st.rerun()
+
+    st.write("---")
     suara_aktif = st.toggle(
         "🔊 Suara & Efek Bunyi",
         key="suara_aktif",
@@ -329,6 +541,7 @@ with st.sidebar:
     )
     if st.button("🎵 Tes Suara (Cek Speaker)", use_container_width=True):
         st.session_state.suara = "menang"
+        st.session_state.status_animasi = "menang"
         st.rerun()
 
     st.write("---")
@@ -347,6 +560,7 @@ with st.sidebar:
     if pilihan != st.session_state.level:
         ganti_level(pilihan)
         st.rerun()
+
     st.markdown(f"### ⭐ Bintang: {st.session_state.bintang} / {len(LEVELS)}")
     st.markdown(" ".join("⭐" if b else "☆" for b in st.session_state.berhasil))
     st.caption(
@@ -354,7 +568,7 @@ with st.sidebar:
         "Saat robot meleset, ajak anak mencari kartu yang salah: itulah debugging."
     )
 
-# Mainkan suara aksi terakhir jika aktif
+# Audio playback
 suara_diputar = st.session_state.pop("suara", None)
 if suara_aktif and suara_diputar and suara_diputar in DAFTAR_SUARA:
     wadah_suara.audio(DAFTAR_SUARA[suara_diputar], format="audio/wav", autoplay=True)
@@ -365,8 +579,18 @@ st.markdown(f"<h2 style='text-align:center;margin:0'>🤖 Robot Mini — {lv['na
 jenis, isi = st.session_state.pesan
 getattr(st, jenis)(isi)
 
+# Render Papan 3D Bergerak
 papan = st.empty()
-papan.markdown(gambar_papan(st.session_state.pos, st.session_state.arah, lv), unsafe_allow_html=True)
+papan.markdown(
+    gambar_papan_3d(
+        st.session_state.pos,
+        st.session_state.arah,
+        lv,
+        status_animasi=st.session_state.status_animasi,
+        mode_tampilan=st.session_state.tampilan_3d,
+    ),
+    unsafe_allow_html=True,
+)
 
 if st.session_state.pop("rayakan", False):
     st.balloons()
@@ -389,16 +613,23 @@ if not st.session_state.langsung:
 
     if jalan and st.session_state.program:
         pos, arah = lv["start"], lv["arah"]
-        papan.markdown(gambar_papan(pos, arah, lv), unsafe_allow_html=True)
+        papan.markdown(
+            gambar_papan_3d(pos, arah, lv, status_animasi="diam", mode_tampilan=st.session_state.tampilan_3d),
+            unsafe_allow_html=True,
+        )
         error = None
         for i, perintah in enumerate(st.session_state.program):
             kotak_program.markdown(gambar_program(st.session_state.program, aktif=i), unsafe_allow_html=True)
             if suara_aktif:
                 s_nama = "maju" if perintah == "maju" else perintah
                 wadah_suara.audio(DAFTAR_SUARA.get(s_nama, DAFTAR_SUARA["maju"]), format="audio/wav", autoplay=True)
-            time.sleep(0.6)
+            time.sleep(0.55)
             pos, arah, error = langkah(pos, arah, perintah, lv)
-            papan.markdown(gambar_papan(pos, arah, lv), unsafe_allow_html=True)
+            anim_step = "tabrak" if error else ("menang" if pos == lv["target"] else "diam")
+            papan.markdown(
+                gambar_papan_3d(pos, arah, lv, status_animasi=anim_step, mode_tampilan=st.session_state.tampilan_3d),
+                unsafe_allow_html=True,
+            )
             if error:
                 if suara_aktif:
                     wadah_suara.audio(DAFTAR_SUARA["tabrak"], format="audio/wav", autoplay=True)
@@ -407,10 +638,12 @@ if not st.session_state.langsung:
         st.session_state.pos, st.session_state.arah = pos, arah
         if error:
             st.session_state.pesan = ("warning", f"{error} Kartu nomor {i + 1} perlu diperbaiki 🔧")
+            st.session_state.status_animasi = "tabrak"
         elif pos == lv["target"]:
             selesai_level()
         else:
             st.session_state.pesan = ("warning", "Hampir! Robot belum sampai bola. Tambah atau ganti kartunya 🔧")
+            st.session_state.status_animasi = "diam"
         st.rerun()
 else:
     st.button("🔄 Mulai lagi", on_click=ulang, use_container_width=True)
