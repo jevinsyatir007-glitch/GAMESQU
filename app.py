@@ -7,11 +7,84 @@ Cara menjalankan:
 
 Anak menekan tombol panah untuk menyusun "program", lalu menekan JALAN.
 Robot bergerak sesuai urutan kartu. Kalau meleset, perbaiki kartunya (debugging).
+Dilengkapi efek suara (SFX) ceria untuk anak.
 """
 
+import math
+import struct
 import time
 
 import streamlit as st
+
+# ---------------------------------------------------------------------------
+# Generator Efek Suara (WAV Sintesis Tanpa Library Eksternal)
+# ---------------------------------------------------------------------------
+def buat_wav(nada_list, sample_rate=22050):
+    """Membuat data WAV mono 16-bit PCM dari daftar nada."""
+    raw_samples = []
+    for freq, durasi, bentuk, vol in nada_list:
+        total_samples = int(sample_rate * durasi)
+        for i in range(total_samples):
+            t = i / sample_rate
+            fade = 1.0 - (i / total_samples)  # Redam di akhir agar tidak 'klik'
+            if bentuk == "sine":
+                val = math.sin(2 * math.pi * freq * t)
+            elif bentuk == "square":
+                val = 0.5 if (math.sin(2 * math.pi * freq * t) > 0) else -0.5
+            elif bentuk == "triangle":
+                val = 2.0 * abs(2.0 * (t * freq - math.floor(0.5 + t * freq))) - 1.0
+            else:
+                val = math.sin(2 * math.pi * freq * t)
+            sample = int(val * fade * 32767 * vol)
+            raw_samples.append(sample)
+
+    byte_data = bytearray()
+    for s in raw_samples:
+        byte_data.extend(struct.pack("<h", max(-32768, min(32767, s))))
+
+    wav = bytearray()
+    data_size = len(byte_data)
+    wav.extend(b"RIFF")
+    wav.extend(struct.pack("<I", 36 + data_size))
+    wav.extend(b"WAVEfmt ")
+    wav.extend(struct.pack("<I", 16))
+    wav.extend(struct.pack("<H", 1))  # PCM
+    wav.extend(struct.pack("<H", 1))  # Mono
+    wav.extend(struct.pack("<I", sample_rate))
+    wav.extend(struct.pack("<I", sample_rate * 2))
+    wav.extend(struct.pack("<H", 2))
+    wav.extend(struct.pack("<H", 16))
+    wav.extend(b"data")
+    wav.extend(struct.pack("<I", data_size))
+    wav.extend(byte_data)
+    return bytes(wav)
+
+
+# Koleksi efek suara sintetis
+DAFTAR_SUARA = {
+    # Langkah robot ceria (nada ganda naik)
+    "maju": buat_wav([(480, 0.05, "triangle", 0.45), (720, 0.08, "triangle", 0.45)]),
+    # Belok kiri
+    "kiri": buat_wav([(380, 0.05, "sine", 0.4), (540, 0.08, "sine", 0.4)]),
+    # Belok kanan
+    "kanan": buat_wav([(540, 0.05, "sine", 0.4), (380, 0.08, "sine", 0.4)]),
+    # Tabrak batu atau pinggir papan (DDUK!)
+    "tabrak": buat_wav([(160, 0.09, "square", 0.5), (75, 0.18, "square", 0.6)]),
+    # Hore sampai target! (Fanfare C5-E5-G5-C6)
+    "menang": buat_wav([
+        (523, 0.09, "sine", 0.45),
+        (659, 0.09, "sine", 0.45),
+        (784, 0.11, "sine", 0.45),
+        (1046, 0.32, "triangle", 0.55),
+    ]),
+    # Klik kartu
+    "klik": buat_wav([(650, 0.04, "sine", 0.3)]),
+    # Hapus kartu
+    "hapus": buat_wav([(450, 0.04, "sine", 0.35), (280, 0.06, "sine", 0.35)]),
+    # Reset
+    "ulang": buat_wav([(520, 0.05, "triangle", 0.3), (320, 0.08, "triangle", 0.3)]),
+}
+
 
 # ---------------------------------------------------------------------------
 # Data level
@@ -90,6 +163,7 @@ def init_state():
         st.session_state.program = []
         st.session_state.bintang = 0
         st.session_state.berhasil = [False] * len(LEVELS)
+        st.session_state.suara = None
         reset_robot()
 
 
@@ -178,22 +252,27 @@ def tambah(perintah):
         st.session_state.pos, st.session_state.arah = pos, arah
         if err:
             st.session_state.pesan = ("warning", err + " Coba arah lain ya!")
+            st.session_state.suara = "tabrak"
         elif pos == lv["target"]:
             selesai_level()
         else:
             st.session_state.pesan = ("info", "Bagus! Terus...")
+            st.session_state.suara = perintah
     else:
         if len(st.session_state.program) < 12:
             st.session_state.program.append(perintah)
+            st.session_state.suara = "klik"
 
 
 def hapus_terakhir():
     if st.session_state.program:
         st.session_state.program.pop()
+        st.session_state.suara = "hapus"
 
 
 def ulang():
     st.session_state.program = []
+    st.session_state.suara = "ulang"
     reset_robot()
 
 
@@ -204,11 +283,13 @@ def selesai_level():
         st.session_state.bintang += 1
     st.session_state.pesan = ("success", "HORE! Robot sampai! ⭐ Kamu hebat!")
     st.session_state.rayakan = True
+    st.session_state.suara = "menang"
 
 
 def ganti_level(i):
     st.session_state.level = i
     st.session_state.program = []
+    st.session_state.suara = "klik"
     reset_robot()
 
 
@@ -228,13 +309,29 @@ st.markdown(
         font-size: 30px !important; font-weight: 700 !important;
     }
     .block-container { padding-top: 1.2rem; }
+    /* Sembunyikan kontrol audio bawaan agar tampilan tetap rapi */
+    div[data-testid="stAudio"] { display: none !important; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
+# Wadah efek suara
+wadah_suara = st.empty()
+
 with st.sidebar:
     st.header("👨👩👧 Untuk Orang Tua")
+    suara_aktif = st.toggle(
+        "🔊 Suara & Efek Bunyi",
+        key="suara_aktif",
+        value=True,
+        help="Nyalakan suara langkah, tabrakan, dan melodi kemenangan.",
+    )
+    if st.button("🎵 Tes Suara (Cek Speaker)", use_container_width=True):
+        st.session_state.suara = "menang"
+        st.rerun()
+
+    st.write("---")
     st.toggle(
         "Mode langsung (usia 3 th)",
         key="langsung",
@@ -256,6 +353,11 @@ with st.sidebar:
         "Batasi 10–15 menit per sesi dan temani anak. "
         "Saat robot meleset, ajak anak mencari kartu yang salah: itulah debugging."
     )
+
+# Mainkan suara aksi terakhir jika aktif
+suara_diputar = st.session_state.pop("suara", None)
+if suara_aktif and suara_diputar and suara_diputar in DAFTAR_SUARA:
+    wadah_suara.audio(DAFTAR_SUARA[suara_diputar], format="audio/wav", autoplay=True)
 
 lv = LEVELS[st.session_state.level]
 st.markdown(f"<h2 style='text-align:center;margin:0'>🤖 Robot Mini — {lv['nama']}</h2>", unsafe_allow_html=True)
@@ -291,10 +393,15 @@ if not st.session_state.langsung:
         error = None
         for i, perintah in enumerate(st.session_state.program):
             kotak_program.markdown(gambar_program(st.session_state.program, aktif=i), unsafe_allow_html=True)
+            if suara_aktif:
+                s_nama = "maju" if perintah == "maju" else perintah
+                wadah_suara.audio(DAFTAR_SUARA.get(s_nama, DAFTAR_SUARA["maju"]), format="audio/wav", autoplay=True)
             time.sleep(0.6)
             pos, arah, error = langkah(pos, arah, perintah, lv)
             papan.markdown(gambar_papan(pos, arah, lv), unsafe_allow_html=True)
             if error:
+                if suara_aktif:
+                    wadah_suara.audio(DAFTAR_SUARA["tabrak"], format="audio/wav", autoplay=True)
                 break
         time.sleep(0.4)
         st.session_state.pos, st.session_state.arah = pos, arah
